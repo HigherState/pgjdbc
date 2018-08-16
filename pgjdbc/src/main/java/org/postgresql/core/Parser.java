@@ -5,7 +5,7 @@
 
 package org.postgresql.core;
 
-import org.postgresql.jdbc.EscapedFunctions;
+import org.postgresql.jdbc.EscapedFunctions2;
 import org.postgresql.util.GT;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
@@ -63,6 +63,7 @@ public class Parser {
     boolean isValuesFound = false;
     int valuesBraceOpenPosition = -1;
     int valuesBraceClosePosition = -1;
+    boolean valuesBraceCloseFound = false;
     boolean isInsertPresent = false;
     boolean isReturningPresent = false;
     boolean isReturningPresentPrev = false;
@@ -73,11 +74,13 @@ public class Parser {
     boolean whitespaceOnly = true;
     int keyWordCount = 0;
     int keywordStart = -1;
+    int keywordEnd = -1;
     for (int i = 0; i < aChars.length; ++i) {
       char aChar = aChars[i];
       boolean isKeyWordChar = false;
       // ';' is ignored as it splits the queries
       whitespaceOnly &= aChar == ';' || Character.isWhitespace(aChar);
+      keywordEnd = i; // parseSingleQuotes, parseDoubleQuotes, etc move index so we keep old value
       switch (aChar) {
         case '\'': // single-quotes
           i = Parser.parseSingleQuotes(aChars, i, standardConformingStrings);
@@ -103,7 +106,7 @@ public class Parser {
 
         case ')':
           inParen--;
-          if (inParen == 0 && isValuesFound) {
+          if (inParen == 0 && isValuesFound && !valuesBraceCloseFound) {
             // If original statement is multi-values like VALUES (...), (...), ... then
             // search for the latest closing paren
             valuesBraceClosePosition = nativeSql.length() + i - fragmentStart;
@@ -148,6 +151,13 @@ public class Parser {
                   nativeQueries = new ArrayList<NativeQuery>();
                 }
 
+                if (!isValuesFound || !isCurrentReWriteCompatible || valuesBraceClosePosition == -1
+                    || (bindPositions != null
+                    && valuesBraceClosePosition < bindPositions.get(bindPositions.size() - 1))) {
+                  valuesBraceOpenPosition = -1;
+                  valuesBraceClosePosition = -1;
+                }
+
                 nativeQueries.add(new NativeQuery(nativeSql.toString(),
                     toIntArray(bindPositions), false,
                     SqlCommand.createStatementTypeInfo(
@@ -166,8 +176,11 @@ public class Parser {
                 bindPositions.clear();
               }
               nativeSql.setLength(0);
+              isValuesFound = false;
+              isCurrentReWriteCompatible = false;
               valuesBraceOpenPosition = -1;
               valuesBraceClosePosition = -1;
+              valuesBraceCloseFound = false;
             }
           }
           break;
@@ -184,11 +197,16 @@ public class Parser {
           isKeyWordChar = isIdentifierStartChar(aChar);
           if (isKeyWordChar) {
             keywordStart = i;
+            if (valuesBraceOpenPosition != -1 && inParen == 0) {
+              // When the statement already has multi-values, stop looking for more of them
+              // Since values(?,?),(?,?),... should not contain keywords in the middle
+              valuesBraceCloseFound = true;
+            }
           }
           break;
       }
       if (keywordStart >= 0 && (i == aChars.length - 1 || !isKeyWordChar)) {
-        int wordLength = (isKeyWordChar ? i + 1 : i) - keywordStart;
+        int wordLength = (isKeyWordChar ? i + 1 : keywordEnd) - keywordStart;
         if (currentCommandType == SqlCommandType.BLANK) {
           if (wordLength == 6 && parseUpdateKeyword(aChars, keywordStart)) {
             currentCommandType = SqlCommandType.UPDATE;
@@ -211,6 +229,12 @@ public class Parser {
               isCurrentReWriteCompatible = false;
             }
           }
+        } else if (currentCommandType == SqlCommandType.WITH
+            && inParen == 0) {
+          SqlCommandType command = parseWithCommandType(aChars, i, keywordStart, wordLength);
+          if (command != null) {
+            currentCommandType = command;
+          }
         }
         if (inParen != 0 || aChar == ')') {
           // RETURNING and VALUES cannot be present in braces
@@ -229,10 +253,10 @@ public class Parser {
         }
       }
     }
-    if (!isValuesFound) {
-      isCurrentReWriteCompatible = false;
-    }
-    if (!isCurrentReWriteCompatible) {
+
+    if (!isValuesFound || !isCurrentReWriteCompatible || valuesBraceClosePosition == -1
+        || (bindPositions != null
+        && valuesBraceClosePosition < bindPositions.get(bindPositions.size() - 1))) {
       valuesBraceOpenPosition = -1;
       valuesBraceClosePosition = -1;
     }
@@ -273,6 +297,47 @@ public class Parser {
     return nativeQueries;
   }
 
+  private static SqlCommandType parseWithCommandType(char[] aChars, int i, int keywordStart,
+      int wordLength) {
+    // This parses `with x as (...) ...`
+    // Corner case is `with select as (insert ..) select * from select
+    SqlCommandType command;
+    if (wordLength == 6 && parseUpdateKeyword(aChars, keywordStart)) {
+      command = SqlCommandType.UPDATE;
+    } else if (wordLength == 6 && parseDeleteKeyword(aChars, keywordStart)) {
+      command = SqlCommandType.DELETE;
+    } else if (wordLength == 6 && parseInsertKeyword(aChars, keywordStart)) {
+      command = SqlCommandType.INSERT;
+    } else if (wordLength == 6 && parseSelectKeyword(aChars, keywordStart)) {
+      command = SqlCommandType.SELECT;
+    } else {
+      return null;
+    }
+    // update/delete/insert/select keyword detected
+    // Check if `AS` follows
+    int nextInd = i;
+    // The loop should skip whitespace and comments
+    for (; nextInd < aChars.length; nextInd++) {
+      char nextChar = aChars[nextInd];
+      if (nextChar == '-') {
+        nextInd = Parser.parseLineComment(aChars, nextInd);
+      } else if (nextChar == '/') {
+        nextInd = Parser.parseBlockComment(aChars, nextInd);
+      } else if (Character.isWhitespace(nextChar)) {
+        // Skip whitespace
+        continue;
+      } else {
+        break;
+      }
+    }
+    if (nextInd + 2 >= aChars.length
+        || (!parseAsKeyword(aChars, nextInd)
+        || isIdentifierContChar(aChars[nextInd + 2]))) {
+      return command;
+    }
+    return null;
+  }
+
   private static boolean addReturning(StringBuilder nativeSql, SqlCommandType currentCommandType,
       String[] returningColumnNames, boolean isReturningPresent) throws SQLException {
     if (isReturningPresent || returningColumnNames.length == 0) {
@@ -280,7 +345,8 @@ public class Parser {
     }
     if (currentCommandType != SqlCommandType.INSERT
         && currentCommandType != SqlCommandType.UPDATE
-        && currentCommandType != SqlCommandType.DELETE) {
+        && currentCommandType != SqlCommandType.DELETE
+        && currentCommandType != SqlCommandType.WITH) {
       return false;
     }
 
@@ -318,11 +384,11 @@ public class Parser {
   }
 
   /**
-   * Find the end of the single-quoted string starting at the given offset.
+   * <p>Find the end of the single-quoted string starting at the given offset.</p>
    *
-   * Note: for <tt>'single '' quote in string'</tt>, this method currently returns the offset of
+   * <p>Note: for <tt>'single '' quote in string'</tt>, this method currently returns the offset of
    * first <tt>'</tt> character after the initial one. The caller must call the method a second time
-   * for the second part of the quoted string.
+   * for the second part of the quoted string.</p>
    *
    * @param query                     query
    * @param offset                    start offset
@@ -368,11 +434,11 @@ public class Parser {
   }
 
   /**
-   * Find the end of the double-quoted string starting at the given offset.
+   * <p>Find the end of the double-quoted string starting at the given offset.</p>
    *
-   * Note: for <tt>&quot;double &quot;&quot; quote in string&quot;</tt>, this method currently
+   * <p>Note: for <tt>&quot;double &quot;&quot; quote in string&quot;</tt>, this method currently
    * returns the offset of first <tt>&quot;</tt> character after the initial one. The caller must
-   * call the method a second time for the second part of the quoted string.
+   * call the method a second time for the second part of the quoted string.</p>
    *
    * @param query  query
    * @param offset start offset
@@ -628,6 +694,26 @@ public class Parser {
   }
 
   /**
+   * Faster version of {@link Long#parseLong(String)} when parsing a substring is required
+   *
+   * @param s string to parse
+   * @param beginIndex begin index
+   * @param endIndex end index
+   * @return long value
+   */
+  public static long parseLong(String s, int beginIndex, int endIndex) {
+    // Fallback to default implementation in case the string is long
+    if (endIndex - beginIndex > 16) {
+      return Long.parseLong(s.substring(beginIndex, endIndex));
+    }
+    long res = digitAt(s, beginIndex);
+    for (beginIndex++; beginIndex < endIndex; beginIndex++) {
+      res = res * 10 + digitAt(s, beginIndex);
+    }
+    return res;
+  }
+
+  /**
    * Parse string to check presence of WITH keyword regardless of case.
    *
    * @param query char[] of the query statement
@@ -646,6 +732,47 @@ public class Parser {
   }
 
   /**
+   * Parse string to check presence of AS keyword regardless of case.
+   *
+   * @param query char[] of the query statement
+   * @param offset position of query to start checking
+   * @return boolean indicates presence of word
+   */
+  public static boolean parseAsKeyword(final char[] query, int offset) {
+    if (query.length < (offset + 2)) {
+      return false;
+    }
+
+    return (query[offset] | 32) == 'a'
+        && (query[offset + 1] | 32) == 's';
+  }
+
+  /**
+   * Returns true if a given string {@code s} has digit at position {@code pos}.
+   * @param s input string
+   * @param pos position (0-based)
+   * @return true if input string s has digit at position pos
+   */
+  public static boolean isDigitAt(String s, int pos) {
+    return pos > 0 && pos < s.length() && Character.isDigit(s.charAt(pos));
+  }
+
+  /**
+   * Converts digit at position {@code pos} in string {@code s} to integer or throws.
+   * @param s input string
+   * @param pos position (0-based)
+   * @return integer value of a digit at position pos
+   * @throws NumberFormatException if character at position pos is not an integer
+   */
+  public static int digitAt(String s, int pos) {
+    int c = s.charAt(pos) - '0';
+    if (c < 0 || c > 9) {
+      throw new NumberFormatException("Input string: \"" + s + "\", position: " + pos);
+    }
+    return c;
+  }
+
+  /**
    * @param c character
    * @return true if the character is a whitespace character as defined in the backend's parser
    */
@@ -656,7 +783,7 @@ public class Parser {
   /**
    * @param c character
    * @return true if the given character is a valid character for an operator in the backend's
-   * parser
+   *     parser
    */
   public static boolean isOperatorChar(char c) {
     /*
@@ -782,7 +909,7 @@ public class Parser {
     // RE: frequently used statements are cached (see {@link org.postgresql.jdbc.PgConnection#borrowQuery}), so this "merge" is not that important.
     String sql = jdbcSql;
     boolean isFunction = false;
-    boolean outParmBeforeFunc = false;
+    boolean outParamBeforeFunc = false;
 
     int len = jdbcSql.length();
     int state = 1;
@@ -811,7 +938,7 @@ public class Parser {
 
         case 2:  // After {, looking for ? or =, skipping whitespace
           if (ch == '?') {
-            outParmBeforeFunc =
+            outParamBeforeFunc =
                 isFunction = true;   // { ? = call ... }  -- function with one out parameter
             ++i;
             ++state;
@@ -914,7 +1041,7 @@ public class Parser {
     if (i == len && !syntaxError) {
       if (state == 1) {
         // Not an escaped syntax.
-        return new JdbcCallParseInfo(sql, isFunction, outParmBeforeFunc);
+        return new JdbcCallParseInfo(sql, isFunction);
       }
       if (state != 8) {
         syntaxError = true; // Ran out of query while still parsing
@@ -927,46 +1054,58 @@ public class Parser {
           PSQLState.STATEMENT_NOT_ALLOWED_IN_FUNCTION_CALL);
     }
 
-    if (serverVersion < 80100 /* 8.1 */ || protocolVersion != 3) {
-      sql = "select " + jdbcSql.substring(startIndex, endIndex) + " as result";
-      return new JdbcCallParseInfo(sql, isFunction, outParmBeforeFunc);
-    }
+    String prefix = "select * from ";
+    String suffix = " as result";
+
     String s = jdbcSql.substring(startIndex, endIndex);
-    StringBuilder sb = new StringBuilder(s);
+    int prefixLength = prefix.length();
+    StringBuilder sb = new StringBuilder(prefixLength + jdbcSql.length() + suffix.length() + 10);
+    sb.append(prefix);
+    sb.append(s);
 
     int opening = s.indexOf('(') + 1;
     if (opening == 0) {
-      sb.append(outParmBeforeFunc ? "(?)" : "()");
-    } else if (outParmBeforeFunc) {
+      // here the function call has no parameters declaration eg : "{ ? = call pack_getValue}"
+      sb.append(outParamBeforeFunc ? "(?)" : "()");
+    } else if (outParamBeforeFunc) {
       // move the single out parameter into the function call
       // so that it can be treated like all other parameters
       boolean needComma = false;
 
-      int closing = s.indexOf(')', opening);
-      for (int j = opening; j < closing; j++) {
-        if (!Character.isWhitespace(sb.charAt(j))) {
+      // the following loop will check if the function call has parameters
+      // eg "{ ? = call pack_getValue(?) }" vs "{ ? = call pack_getValue() }
+      for (int j = opening + prefixLength; j < sb.length(); j++) {
+        char c = sb.charAt(j);
+        if (c == ')') {
+          break;
+        }
+
+        if (!Character.isWhitespace(c)) {
           needComma = true;
           break;
         }
       }
+
+      // insert the return parameter as the first parameter of the function call
       if (needComma) {
-        sb.insert(opening, "?,");
+        sb.insert(opening + prefixLength, "?,");
       } else {
-        sb.insert(opening, "?");
+        sb.insert(opening + prefixLength, "?");
       }
     }
-    sql = "select * from " + sb.toString() + " as result";
-    return new JdbcCallParseInfo(sql, isFunction, outParmBeforeFunc);
+
+    sql = sb.append(suffix).toString();
+    return new JdbcCallParseInfo(sql, isFunction);
   }
 
   /**
-   * Filter the SQL string of Java SQL Escape clauses.
-   * <p>
-   * Currently implemented Escape clauses are those mentioned in 11.3 in the specification.
+   * <p>Filter the SQL string of Java SQL Escape clauses.</p>
+   *
+   * <p>Currently implemented Escape clauses are those mentioned in 11.3 in the specification.
    * Basically we look through the sql string for {d xxx}, {t xxx}, {ts xxx}, {oj xxx} or {fn xxx}
    * in non-string sql code. When we find them, we just strip the escape part leaving only the xxx
    * part. So, something like "select * from x where d={d '2001-10-09'}" would return "select * from
-   * x where d= '2001-10-09'".
+   * x where d= '2001-10-09'".</p>
    *
    * @param p_sql                     the original query text
    * @param replaceProcessingEnabled  whether replace_processing_enabled is on
@@ -1077,7 +1216,7 @@ public class Parser {
             break;
           } else if (c == '{') { // start of an escape code?
             if (i + 1 < len) {
-              SqlParseState[] availableStates = SqlParseState.values();
+              SqlParseState[] availableStates = SqlParseState.VALUES;
               // skip first state, it's not a escape code state
               for (int j = 1; j < availableStates.length; j++) {
                 SqlParseState availableState = availableStates[j];
@@ -1099,25 +1238,7 @@ public class Parser {
 
         case ESC_FUNCTION:
           // extract function name
-          String functionName;
-          int posArgs;
-          for (posArgs = i; posArgs < len && p_sql[posArgs] != '('; posArgs++) {
-            ;
-          }
-          if (posArgs < len) {
-            functionName = new String(p_sql, i, posArgs - i).trim();
-            // extract arguments
-            i = posArgs + 1;// we start the scan after the first (
-            StringBuilder args = new StringBuilder();
-            i = parseSql(p_sql, i, args, false, stdStrings);
-            // translate the function and parse arguments
-            newsql.append(escapeFunction(functionName, args.toString(), stdStrings));
-          }
-          // go to the end of the function copying anything found
-          i++;
-          while (i < len && p_sql[i] != '}') {
-            newsql.append(p_sql[i++]);
-          }
+          i = escapeFunction(p_sql, i, newsql, stdStrings);
           state = SqlParseState.IN_SQLCODE; // end of escaped function (or query)
           break;
         case ESC_DATE:
@@ -1136,6 +1257,14 @@ public class Parser {
     return i;
   }
 
+  private static int findOpenBrace(char[] p_sql, int i) {
+    int posArgs;
+    for (posArgs = i; posArgs < p_sql.length && p_sql[posArgs] != '('; posArgs++) {
+      ;
+    }
+    return posArgs;
+  }
+
   private static void checkParsePosition(int i, int len, int i0, char[] p_sql,
       String message)
       throws PSQLException {
@@ -1147,57 +1276,75 @@ public class Parser {
         PSQLState.SYNTAX_ERROR);
   }
 
+  private static int escapeFunction(char[] p_sql, int i, StringBuilder newsql, boolean stdStrings) throws SQLException {
+    String functionName;
+    int argPos = findOpenBrace(p_sql, i);
+    if (argPos < p_sql.length) {
+      functionName = new String(p_sql, i, argPos - i).trim();
+      // extract arguments
+      i = argPos + 1;// we start the scan after the first (
+      i = escapeFunctionArguments(newsql, functionName, p_sql, i, stdStrings);
+    }
+    // go to the end of the function copying anything found
+    i++;
+    while (i < p_sql.length && p_sql[i] != '}') {
+      newsql.append(p_sql[i++]);
+    }
+    return i;
+  }
+
   /**
-   * generate sql for escaped functions
+   * Generate sql for escaped functions.
    *
+   * @param newsql destination StringBuilder
    * @param functionName the escaped function name
-   * @param args the arguments for this function
+   * @param p_sql input SQL text (containing arguments of a function call with possible JDBC escapes)
+   * @param i position in the input SQL
    * @param stdStrings whether standard_conforming_strings is on
-   * @return the right postgreSql sql
+   * @return the right PostgreSQL sql
    * @throws SQLException if something goes wrong
    */
-  private static String escapeFunction(String functionName, String args, boolean stdStrings)
+  private static int escapeFunctionArguments(StringBuilder newsql, String functionName, char[] p_sql, int i,
+      boolean stdStrings)
       throws SQLException {
-    // parse function arguments
-    int len = args.length();
-    char[] argChars = args.toCharArray();
-    int i = 0;
-    ArrayList<StringBuilder> parsedArgs = new ArrayList<StringBuilder>();
-    while (i < len) {
+    // Maximum arity of functions in EscapedFunctions is 3
+    List<CharSequence> parsedArgs = new ArrayList<CharSequence>(3);
+    while (true) {
       StringBuilder arg = new StringBuilder();
       int lastPos = i;
-      i = parseSql(argChars, i, arg, true, stdStrings);
-      if (lastPos != i) {
+      i = parseSql(p_sql, i, arg, true, stdStrings);
+      if (i != lastPos) {
         parsedArgs.add(arg);
+      }
+      if (i >= p_sql.length // should not happen
+          || p_sql[i] != ',') {
+        break;
       }
       i++;
     }
-    // we can now translate escape functions
-    try {
-      Method escapeMethod = EscapedFunctions.getFunction(functionName);
-      return (String) escapeMethod.invoke(null, parsedArgs);
-    } catch (InvocationTargetException e) {
-      if (e.getTargetException() instanceof SQLException) {
-        throw (SQLException) e.getTargetException();
-      } else {
-        throw new PSQLException(e.getTargetException().getMessage(), PSQLState.SYSTEM_ERROR);
-      }
-    } catch (Exception e) {
-      // by default the function name is kept unchanged
-      StringBuilder buf = new StringBuilder();
-      buf.append(functionName).append('(');
-      for (int iArg = 0; iArg < parsedArgs.size(); iArg++) {
-        buf.append(parsedArgs.get(iArg));
-        if (iArg != (parsedArgs.size() - 1)) {
-          buf.append(',');
-        }
-      }
-      buf.append(')');
-      return buf.toString();
+    Method method = EscapedFunctions2.getFunction(functionName);
+    if (method == null) {
+      newsql.append(functionName);
+      EscapedFunctions2.appendCall(newsql, "(", ",", ")", parsedArgs);
+      return i;
     }
+    try {
+      method.invoke(null, newsql, parsedArgs);
+    } catch (InvocationTargetException e) {
+      Throwable targetException = e.getTargetException();
+      if (targetException instanceof SQLException) {
+        throw (SQLException) targetException;
+      } else {
+        throw new PSQLException(targetException.getMessage(), PSQLState.SYSTEM_ERROR);
+      }
+    } catch (IllegalAccessException e) {
+      throw new PSQLException(e.getMessage(), PSQLState.SYSTEM_ERROR);
+    }
+    return i;
   }
 
   private static final char[] QUOTE_OR_ALPHABETIC_MARKER = {'\"', '0'};
+  private static final char[] QUOTE_OR_ALPHABETIC_MARKER_OR_PARENTHESIS = {'\"', '0', '('};
   private static final char[] SINGLE_QUOTE = {'\''};
 
   // Static variables for parsing SQL when replaceProcessing is true.
@@ -1208,8 +1355,10 @@ public class Parser {
 
     ESC_TIMESTAMP("ts", SINGLE_QUOTE, "TIMESTAMP "),
     ESC_FUNCTION("fn", QUOTE_OR_ALPHABETIC_MARKER, null),
-    ESC_OUTERJOIN("oj", QUOTE_OR_ALPHABETIC_MARKER, null),
+    ESC_OUTERJOIN("oj", QUOTE_OR_ALPHABETIC_MARKER_OR_PARENTHESIS, null),
     ESC_ESCAPECHAR("escape", SINGLE_QUOTE, "ESCAPE ");
+
+    private static final SqlParseState[] VALUES = values();
 
     private final char[] escapeKeyword;
     private final char[] allowedValues;
@@ -1225,22 +1374,27 @@ public class Parser {
       this.replacementKeyword = replacementKeyword;
     }
 
-    private int getMatchedPosition(char[] p_sql, int pos) {
-      int newPos = pos;
-
+    private boolean startMatches(char[] p_sql, int pos) {
       // check for the keyword
       for (char c : escapeKeyword) {
-        if (newPos >= p_sql.length) {
-          return 0;
+        if (pos >= p_sql.length) {
+          return false;
         }
-        char curr = p_sql[newPos++];
+        char curr = p_sql[pos++];
         if (curr != c && curr != Character.toUpperCase(c)) {
-          return 0;
+          return false;
         }
       }
-      if (newPos >= p_sql.length) {
+      return pos < p_sql.length;
+    }
+
+    private int getMatchedPosition(char[] p_sql, int pos) {
+      // check for the keyword
+      if (!startMatches(p_sql, pos)) {
         return 0;
       }
+
+      int newPos = pos + escapeKeyword.length;
 
       // check for the beginning of the value
       char curr = p_sql[newPos];

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, PostgreSQL Global Development Group
+ * Copyright (c) 2017, PostgreSQL Global Development Group
  * See the LICENSE file in the project root for more information.
  */
 
@@ -14,6 +14,7 @@ import java.io.BufferedOutputStream;
 import java.io.Closeable;
 import java.io.EOFException;
 import java.io.FilterOutputStream;
+import java.io.Flushable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -21,17 +22,16 @@ import java.io.Writer;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.sql.SQLException;
-
 import javax.net.SocketFactory;
 
 /**
- * Wrapper around the raw connection to the server that implements some basic primitives
- * (reading/writing formatted data, doing string encoding, etc).
- * <p>
- * In general, instances of PGStream are not threadsafe; the caller must ensure that only one thread
- * at a time is accessing a particular PGStream instance.
+ * <p>Wrapper around the raw connection to the server that implements some basic primitives
+ * (reading/writing formatted data, doing string encoding, etc).</p>
+ *
+ * <p>In general, instances of PGStream are not threadsafe; the caller must ensure that only one thread
+ * at a time is accessing a particular PGStream instance.</p>
  */
-public class PGStream implements Closeable {
+public class PGStream implements Closeable, Flushable {
   private final SocketFactory socketFactory;
   private final HostSpec hostSpec;
 
@@ -63,7 +63,7 @@ public class PGStream implements Closeable {
       // When using a SOCKS proxy, the host might not be resolvable locally,
       // thus we defer resolution until the traffic reaches the proxy. If there
       // is no proxy, we must resolve the host to an IP to connect the socket.
-      InetSocketAddress address = System.getProperty("socksProxyHost") == null
+      InetSocketAddress address = hostSpec.shouldResolve()
           ? new InetSocketAddress(hostSpec.getHost(), hostSpec.getPort())
           : InetSocketAddress.createUnresolved(hostSpec.getHost(), hostSpec.getPort());
       socket.connect(address, timeout);
@@ -147,6 +147,9 @@ public class PGStream implements Closeable {
    * @throws IOException if something goes wrong
    */
   public void setEncoding(Encoding encoding) throws IOException {
+    if (this.encoding != null && this.encoding.name().equals(encoding.name())) {
+      return;
+    }
     // Close down any old writer.
     if (encodingWriter != null) {
       encodingWriter.close();
@@ -169,12 +172,12 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Get a Writer instance that encodes directly onto the underlying stream.
-   * <p>
-   * The returned Writer should not be closed, as it's a shared object. Writer.flush needs to be
+   * <p>Get a Writer instance that encodes directly onto the underlying stream.</p>
+   *
+   * <p>The returned Writer should not be closed, as it's a shared object. Writer.flush needs to be
    * called when switching between use of the Writer and use of the PGStream write methods, but it
    * won't actually flush output all the way out -- call {@link #flush} to actually ensure all
-   * output has been pushed to the server.
+   * output has been pushed to the server.</p>
    *
    * @return the shared Writer instance
    * @throws IOException if something goes wrong.
@@ -187,7 +190,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Sends a single character to the back end
+   * Sends a single character to the back end.
    *
    * @param val the character to be sent
    * @throws IOException if an I/O error occurs
@@ -197,7 +200,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Sends a 4-byte integer to the back end
+   * Sends a 4-byte integer to the back end.
    *
    * @param val the integer to be sent
    * @throws IOException if an I/O error occurs
@@ -211,7 +214,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Sends a 2-byte integer (short) to the back end
+   * Sends a 2-byte integer (short) to the back end.
    *
    * @param val the integer to be sent
    * @throws IOException if an I/O error occurs or {@code val} cannot be encoded in 2 bytes
@@ -227,7 +230,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Send an array of bytes to the backend
+   * Send an array of bytes to the backend.
    *
    * @param buf The array of bytes to be sent
    * @throws IOException if an I/O error occurs
@@ -281,7 +284,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Receives a single character from the backend
+   * Receives a single character from the backend.
    *
    * @return the character received
    * @throws IOException if an I/O Error occurs
@@ -295,7 +298,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Receives a four byte integer from the backend
+   * Receives a four byte integer from the backend.
    *
    * @return the integer received from the backend
    * @throws IOException if an I/O error occurs
@@ -310,7 +313,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Receives a two byte integer from the backend
+   * Receives a two byte integer from the backend.
    *
    * @return the integer received from the backend
    * @throws IOException if an I/O error occurs
@@ -419,7 +422,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Reads in a given number of bytes from the backend
+   * Reads in a given number of bytes from the backend.
    *
    * @param siz number of bytes to read
    * @return array of bytes received
@@ -432,7 +435,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Reads in a given number of bytes from the backend
+   * Reads in a given number of bytes from the backend.
    *
    * @param buf buffer to store result
    * @param off offset in buffer
@@ -503,6 +506,7 @@ public class PGStream implements Closeable {
    *
    * @throws IOException if an I/O error occurs
    */
+  @Override
   public void flush() throws IOException {
     if (encodingWriter != null) {
       encodingWriter.flush();
@@ -511,7 +515,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Consume an expected EOF from the backend
+   * Consume an expected EOF from the backend.
    *
    * @throws IOException if an I/O error occurs
    * @throws SQLException if we get something other than an EOF
@@ -526,7 +530,7 @@ public class PGStream implements Closeable {
   }
 
   /**
-   * Closes the connection
+   * Closes the connection.
    *
    * @throws IOException if an I/O Error occurs
    */
@@ -539,5 +543,13 @@ public class PGStream implements Closeable {
     pg_output.close();
     pg_input.close();
     connection.close();
+  }
+
+  public void setNetworkTimeout(int milliseconds) throws IOException {
+    connection.setSoTimeout(milliseconds);
+  }
+
+  public int getNetworkTimeout() throws IOException {
+    return connection.getSoTimeout();
   }
 }

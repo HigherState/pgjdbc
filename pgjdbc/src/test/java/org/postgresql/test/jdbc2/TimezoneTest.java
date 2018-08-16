@@ -32,25 +32,24 @@ import java.util.Properties;
 import java.util.TimeZone;
 
 /**
- * Tests for time and date types with calendars involved. TimestampTest was melting my brain, so I
- * started afresh. -O
+ * <p>Tests for time and date types with calendars involved. TimestampTest was melting my brain, so I
+ * started afresh. -O</p>
  *
- * Conversions that this code tests:
- * <p>
- * setTimestamp -> timestamp, timestamptz, date, time, timetz
- * <p>
- * setDate -> timestamp, timestamptz, date
- * <p>
- * setTime -> time, timetz
+ * <p>Conversions that this code tests:</p>
  *
- * <p>
- * getTimestamp <- timestamp, timestamptz, date, time, timetz
- * <p>
- * getDate <- timestamp, timestamptz, date
- * <p>
- * getTime <- timestamp, timestamptz, time, timetz
+ * <p>setTimestamp -> timestamp, timestamptz, date, time, timetz</p>
  *
- * (this matches what we must support per JDBC 3.0, tables B-5 and B-6)
+ * <p>setDate -> timestamp, timestamptz, date</p>
+ *
+ * <p>setTime -> time, timetz</p>
+ *
+ * <p>getTimestamp <- timestamp, timestamptz, date, time, timetz</p>
+ *
+ * <p>getDate <- timestamp, timestamptz, date</p>
+ *
+ * <p>getTime <- timestamp, timestamptz, time, timetz</p>
+ *
+ * <p>(this matches what we must support per JDBC 3.0, tables B-5 and B-6)</p>
  */
 public class TimezoneTest {
   private static final int DAY = 24 * 3600 * 1000;
@@ -189,10 +188,10 @@ public class TimezoneTest {
       // 1970-01-01 15:00:00 +0300 -> 1970-01-01 07:00:00 -0500
       assertEquals(43200000L, ts.getTime());
       ts = rs.getTimestamp(4, cGMT13);
-      // 1970-01-01 15:00:00 +0300 -> 1970-01-02 01:00:00 +1300 (CHECK ME)
-      assertEquals(-43200000L, ts.getTime());
-      str = rs.getString(3);
-      assertEquals("timetz -> getString" + format, "15:00:00", str);
+      // 1970-01-01 15:00:00 +0300 -> 1970-01-02 01:00:00 +1300
+      assertEquals(43200000L, ts.getTime());
+      str = rs.getString(4);
+      assertEquals("timetz -> getString" + format, "15:00:00+03", str);
 
       // date: 2005-01-01
       ts = rs.getTimestamp(5);
@@ -299,7 +298,7 @@ public class TimezoneTest {
       assertEquals(43200000L, t.getTime());
       t = rs.getTime(1, cGMT13);
       // 2005-01-02 01:00:00 +1300 -> 1970-01-01 01:00:00 +1300
-      assertEquals(-43200000L, t.getTime());
+      assertEquals(43200000L, t.getTime());
 
       // timestamp: 2005-01-01 15:00:00
       t = rs.getTime(2);
@@ -335,7 +334,7 @@ public class TimezoneTest {
       t = rs.getTime(4, cGMT05);
       assertEquals(43200000L, t.getTime()); // 1970-01-01 07:00:00 -0500
       t = rs.getTime(4, cGMT13);
-      assertEquals(-43200000L, t.getTime()); // 1970-01-01 01:00:00 +1300
+      assertEquals(43200000L, t.getTime()); // 1970-01-01 01:00:00 +1300
       rs.close();
     }
   }
@@ -732,22 +731,22 @@ public class TimezoneTest {
       assertTrue(rs.next());
       assertEquals(seq++, rs.getInt(1));
       assertEquals(tUTC, rs.getTime(2, cUTC));
-      assertEquals(tUTC, rs.getTime(2, cUTC));
+      assertEquals(tUTC, rs.getTime(3, cUTC));
 
       assertTrue(rs.next());
       assertEquals(seq++, rs.getInt(1));
       assertEquals(tGMT03, rs.getTime(2, cGMT03));
-      assertEquals(tGMT03, rs.getTime(2, cGMT03));
+      assertEquals(tGMT03, rs.getTime(3, cGMT03));
 
       assertTrue(rs.next());
       assertEquals(seq++, rs.getInt(1));
       assertEquals(tGMT05, rs.getTime(2, cGMT05));
-      assertEquals(tGMT05, rs.getTime(2, cGMT05));
+      assertEquals(tGMT05, rs.getTime(3, cGMT05));
 
       assertTrue(rs.next());
       assertEquals(seq++, rs.getInt(1));
       assertEquals(tGMT13, rs.getTime(2, cGMT13));
-      assertEquals(tGMT13, rs.getTime(2, cGMT13));
+      assertEquals(tGMT13, rs.getTime(3, cGMT13));
 
       assertTrue(!rs.next());
       ps.close();
@@ -950,7 +949,7 @@ public class TimezoneTest {
   }
 
   /**
-   * Converts the given time
+   * Converts the given time.
    *
    * @param t The time of day. Must be within -24 and + 24 hours of epoc.
    * @param tz The timezone to normalize to.

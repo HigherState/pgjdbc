@@ -13,6 +13,7 @@ import org.postgresql.largeobject.LargeObjectManager;
 import org.postgresql.replication.PGReplicationConnection;
 import org.postgresql.util.PGobject;
 
+import java.sql.Array;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -21,6 +22,25 @@ import java.sql.Statement;
  * returned by the PostgreSQL driver implement PGConnection.
  */
 public interface PGConnection {
+
+  /**
+   * Creates an {@link Array} wrapping <i>elements</i>. This is similar to
+   * {@link java.sql.Connection#createArrayOf(String, Object[])}, but also
+   * provides support for primitive arrays.
+   *
+   * @param typeName
+   *          The SQL name of the type to map the <i>elements</i> to.
+   *          Must not be {@code null}.
+   * @param elements
+   *          The array of objects to map. A {@code null} value will result in
+   *          an {@link Array} representing {@code null}.
+   * @return An {@link Array} wrapping <i>elements</i>.
+   * @throws SQLException
+   *           If for some reason the array cannot be created.
+   * @see java.sql.Connection#createArrayOf(String, Object[])
+   */
+  Array createArrayOf(String typeName, Object elements) throws SQLException;
+
   /**
    * This method returns any notifications that have been received since the last call to this
    * method. Returns null if there have been no notifications.
@@ -69,7 +89,12 @@ public interface PGConnection {
    * @return Fastpath API for the current connection
    * @throws SQLException if something wrong happens
    * @since 7.3
+   * @deprecated This API is somewhat obsolete, as one may achieve similar performance
+   *         and greater functionality by setting up a prepared statement to define
+   *         the function call. Then, executing the statement with binary transmission of parameters
+   *         and results substitutes for a fast-path function call.
    */
+  @Deprecated
   Fastpath getFastpathAPI() throws SQLException;
 
   /**
@@ -83,16 +108,15 @@ public interface PGConnection {
    *             does not work correctly for registering classes that cannot be directly loaded by
    *             the JDBC driver's classloader.
    */
+  @Deprecated
   void addDataType(String type, String className);
 
   /**
-   * This allows client code to add a handler for one of org.postgresql's more unique data types.
+   * <p>This allows client code to add a handler for one of org.postgresql's more unique data types.</p>
    *
-   * <p>
-   * <b>NOTE:</b> This is not part of JDBC, but an extension.
+   * <p><b>NOTE:</b> This is not part of JDBC, but an extension.</p>
    *
-   * <p>
-   * The best way to use this is as follows:
+   * <p>The best way to use this is as follows:</p>
    *
    * <pre>
    * ...
@@ -100,11 +124,9 @@ public interface PGConnection {
    * ...
    * </pre>
    *
-   * <p>
-   * where myconn is an open Connection to org.postgresql.
+   * <p>where myconn is an open Connection to org.postgresql.</p>
    *
-   * <p>
-   * The handling class must extend org.postgresql.util.PGobject
+   * <p>The handling class must extend org.postgresql.util.PGobject</p>
    *
    * @param type the PostgreSQL type to register
    * @param klass the class implementing the Java representation of the type; this class must
@@ -135,7 +157,7 @@ public interface PGConnection {
   int getPrepareThreshold();
 
   /**
-   * Set the default fetch size for statements created from this connection
+   * Set the default fetch size for statements created from this connection.
    *
    * @param fetchSize new default fetch size
    * @throws SQLException if specified negative <code>fetchSize</code> parameter
@@ -145,7 +167,7 @@ public interface PGConnection {
 
 
   /**
-   * Get the default fetch size for statements created from this connection
+   * Get the default fetch size for statements created from this connection.
    *
    * @return current state for default fetch size
    * @see PGProperty#DEFAULT_ROW_FETCH_SIZE
@@ -183,12 +205,14 @@ public interface PGConnection {
   String escapeLiteral(String literal) throws SQLException;
 
   /**
-   * Returns true if the connection is configured to use "simple 'Q' execute" commands only
-   * When running in simple protocol only, certain features are not available: callable statements,
-   * partial result set fetch, bytea type, etc.
-   * The list of supported features is subject to change.
+   * <p>Returns the query mode for this connection.</p>
    *
-   * @return true if the connection is configured to use "simple 'Q' execute" commands only
+   * <p>When running in simple query mode, certain features are not available: callable statements,
+   * partial result set fetch, bytea type, etc.</p>
+   * <p>The list of supported features is subject to change.</p>
+   *
+   * @return the preferred query mode
+   * @see PreferQueryMode
    */
   PreferQueryMode getPreferQueryMode();
 

@@ -32,6 +32,7 @@ import javax.transaction.xa.XAException;
 import javax.transaction.xa.XAResource;
 import javax.transaction.xa.Xid;
 
+
 public class XADataSourceTest {
 
   private XADataSource _ds;
@@ -63,6 +64,8 @@ public class XADataSourceTest {
     st.close();
 
     TestUtil.createTable(_conn, "testxa1", "foo int");
+    TestUtil.createTable(_conn, "testxa2", "foo int primary key");
+    TestUtil.createTable(_conn, "testxa3", "foo int references testxa2(foo) deferrable");
 
     clearAllPrepared();
 
@@ -83,11 +86,14 @@ public class XADataSourceTest {
 
   @After
   public void tearDown() throws SQLException {
-    if (xaconn != null) {
+    try {
       xaconn.close();
+    } catch (Exception ignored) {
     }
-    clearAllPrepared();
 
+    clearAllPrepared();
+    TestUtil.dropTable(_conn, "testxa3");
+    TestUtil.dropTable(_conn, "testxa2");
     TestUtil.dropTable(_conn, "testxa1");
     TestUtil.closeDB(_conn);
 
@@ -346,13 +352,13 @@ public class XADataSourceTest {
   }
 
   /**
-   * Get the time the current transaction was started from the server.
+   * <p>Get the time the current transaction was started from the server.</p>
    *
-   * This can be used to check that transaction doesn't get committed/ rolled back inadvertently, by
+   * <p>This can be used to check that transaction doesn't get committed/ rolled back inadvertently, by
    * calling this once before and after the suspected piece of code, and check that they match. It's
    * a bit iffy, conceivably you might get the same timestamp anyway if the suspected piece of code
    * runs fast enough, and/or the server clock is very coarse grained. But it'll do for testing
-   * purposes.
+   * purposes.</p>
    */
   private static java.sql.Timestamp getTransactionTimestamp(Connection conn) throws SQLException {
     ResultSet rs = conn.createStatement().executeQuery("SELECT now()");
@@ -435,7 +441,366 @@ public class XADataSourceTest {
       fail("Rollback was successful");
     } catch (XAException xae) {
       assertEquals("Checking the errorCode is XAER_NOTA indicating the " + "xid does not exist.",
+          xae.errorCode, XAException.XAER_NOTA);
+    }
+  }
+
+  /**
+   * Invoking prepare on already prepared {@link Xid} causes {@link XAException} being thrown
+   * with error code {@link XAException#XAER_PROTO}.
+   */
+  @Test
+  public void testPreparingPreparedXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+    try {
+      xaRes.prepare(xid);
+      fail("Prepare is expected to fail with XAER_PROTO as xid was already prepared");
+    } catch (XAException xae) {
+      assertEquals("Prepare call on already prepared xid " +  xid + " expects XAER_PROTO",
+          XAException.XAER_PROTO, xae.errorCode);
+    } finally {
+      xaRes.rollback(xid);
+    }
+  }
+
+  /**
+   * Invoking commit on already committed {@link Xid} causes {@link XAException} being thrown
+   * with error code {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testCommitingCommittedXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+    xaRes.commit(xid, false);
+
+    try {
+      xaRes.commit(xid, false);
+      fail("Commit is expected to fail with XAER_NOTA as xid was already committed");
+    } catch (XAException xae) {
+      assertEquals("Commit call on already committed xid " +  xid + " expects XAER_NOTA",
           XAException.XAER_NOTA, xae.errorCode);
+    }
+  }
+
+  /**
+   * Invoking commit on {@link Xid} committed by different connection.
+   * That different connection could be for example transaction manager recovery.
+   */
+  @Test
+  public void testCommitByDifferentConnection() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    XADataSource secondDs = null;
+    try {
+      secondDs = new PGXADataSource();
+      BaseDataSourceTest.setupDataSource((PGXADataSource) secondDs);
+      XAResource secondXaRes = secondDs.getXAConnection().getXAResource();
+      secondXaRes.recover(XAResource.TMSTARTRSCAN | XAResource.TMENDRSCAN);
+      secondXaRes.commit(xid, false);
+    } finally {
+      if (secondDs != null) {
+        secondDs.getXAConnection().close();
+      }
+    }
+
+    try {
+      xaRes.commit(xid, false);
+      fail("Commit is expected to fail with XAER_RMERR as somebody else already committed");
+    } catch (XAException xae) {
+      assertEquals("Commit call on already committed xid " +  xid + " expects XAER_RMERR",
+          XAException.XAER_RMERR, xae.errorCode);
+    }
+  }
+
+  /**
+   * Invoking rollback on {@link Xid} rolled-back by different connection.
+   * That different connection could be for example transaction manager recovery.
+   */
+  @Test
+  public void testRollbackByDifferentConnection() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    XADataSource secondDs = null;
+    try {
+      secondDs = new PGXADataSource();
+      BaseDataSourceTest.setupDataSource((PGXADataSource) secondDs);
+      XAResource secondXaRes = secondDs.getXAConnection().getXAResource();
+      secondXaRes.recover(XAResource.TMSTARTRSCAN | XAResource.TMENDRSCAN);
+      secondXaRes.rollback(xid);
+    } finally {
+      if (secondDs != null) {
+        secondDs.getXAConnection().close();
+      }
+    }
+
+    try {
+      xaRes.rollback(xid);
+      fail("Rollback is expected to fail with XAER_RMERR as somebody else already rolled-back");
+    } catch (XAException xae) {
+      assertEquals("Rollback call on already rolled-back xid " +  xid + " expects XAER_RMERR",
+          XAException.XAER_RMERR, xae.errorCode);
+    }
+  }
+
+  /**
+   * One-phase commit of prepared {@link Xid} should throw exception.
+   */
+  @Test
+  public void testOnePhaseCommitOfPrepared() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    try {
+      xaRes.commit(xid, true);
+      fail("One-phase commit is expected to fail with XAER_PROTO when called on prepared xid");
+    } catch (XAException xae) {
+      assertEquals("One-phase commit of prepared xid " +  xid + " expects XAER_PROTO",
+          XAException.XAER_PROTO, xae.errorCode);
+    }
+  }
+
+  /**
+   * Invoking one-phase commit on already one-phase committed {@link Xid} causes
+   * {@link XAException} being thrown with error code {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testOnePhaseCommitingCommittedXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.commit(xid, true);
+
+    try {
+      xaRes.commit(xid, true);
+      fail("One-phase commit is expected to fail with XAER_NOTA as xid was already committed");
+    } catch (XAException xae) {
+      assertEquals("One-phase commit call on already committed xid " +  xid + " expects XAER_NOTA",
+          XAException.XAER_NOTA, xae.errorCode);
+    }
+  }
+
+  /**
+   * When unknown xid is tried to be prepared the expected {@link XAException#errorCode}
+   * is {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testPrepareUnknownXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    try {
+      xaRes.prepare(xid);
+      fail("Prepare is expected to fail with XAER_NOTA as used unknown xid");
+    } catch (XAException xae) {
+      assertEquals("Prepare call on unknown xid " +  xid + " expects XAER_NOTA",
+          XAException.XAER_NOTA, xae.errorCode);
+    }
+  }
+
+  /**
+   * When unknown xid is tried to be committed the expected {@link XAException#errorCode}
+   * is {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testCommitUnknownXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    Xid unknownXid = new CustomXid(42);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+    try {
+      xaRes.commit(unknownXid, false);
+      fail("Commit is expected to fail with XAER_NOTA as used unknown xid");
+    } catch (XAException xae) {
+      assertEquals("Commit call on unknown xid " +  unknownXid + " expects XAER_NOTA",
+          XAException.XAER_NOTA, xae.errorCode);
+    } finally {
+      xaRes.rollback(xid);
+    }
+  }
+
+  /**
+   * When unknown xid is tried to be committed with one-phase commit optimization
+   * the expected {@link XAException#errorCode} is {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testOnePhaseCommitUnknownXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    Xid unknownXid = new CustomXid(42);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    try {
+      xaRes.commit(unknownXid, true);
+      fail("One-phase commit is expected to fail with XAER_NOTA as used unknown xid");
+    } catch (XAException xae) {
+      assertEquals("Commit call on unknown xid " +  unknownXid + " expects XAER_NOTA",
+          XAException.XAER_NOTA, xae.errorCode);
+    } finally {
+      xaRes.rollback(xid);
+    }
+  }
+
+  /**
+   * When unknown xid is tried to be rolled-back the expected {@link XAException#errorCode}
+   * is {@link XAException#XAER_NOTA}.
+   */
+  @Test
+  public void testRollbackUnknownXid() throws Exception {
+    Xid xid = new CustomXid(1);
+    Xid unknownXid = new CustomXid(42);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+    try {
+      xaRes.rollback(unknownXid);
+      fail("Rollback is expected to fail as used unknown xid");
+    } catch (XAException xae) {
+      assertEquals("Commit call on unknown xid " +  unknownXid + " expects XAER_NOTA",
+          XAException.XAER_NOTA, xae.errorCode);
+    } finally {
+      xaRes.rollback(xid);
+    }
+  }
+
+  /**
+   * When trying to commit xid which was already removed by arbitrary action of database.
+   * Resource manager can't expect state of the {@link Xid}.
+   */
+  @Test
+  public void testDatabaseRemovesPreparedBeforeCommit() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    clearAllPrepared();
+
+    try {
+      xaRes.commit(xid, false);
+      fail("Commit is expected to fail as committed xid was removed before");
+    } catch (XAException xae) {
+      assertEquals("Commit call on xid " +  xid + " not known to DB expects XAER_RMERR",
+          XAException.XAER_RMERR, xae.errorCode);
+    }
+  }
+
+  /**
+   * When trying to rollback xid which was already removed by arbitrary action of database.
+   * Resource manager can't expect state of the {@link Xid}.
+   */
+  @Test
+  public void testDatabaseRemovesPreparedBeforeRollback() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    clearAllPrepared();
+
+    try {
+      xaRes.rollback(xid);
+      fail("Rollback is expected to fail as committed xid was removed before");
+    } catch (XAException xae) {
+      assertEquals("Rollback call on xid " +  xid + " not known to DB expects XAER_RMERR",
+          XAException.XAER_RMERR, xae.errorCode);
+    }
+  }
+
+  /**
+   * When trying to commit and connection issue happens then
+   * {@link XAException} error code {@link XAException#XAER_RMFAIL} is expected.
+   */
+  @Test
+  public void testNetworkIssueOnCommit() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    xaconn.close();
+
+    try {
+      xaRes.commit(xid, false);
+      fail("Commit is expected to fail as connection was closed");
+    } catch (XAException xae) {
+      assertEquals("Commit call on closed connection expects XAER_RMFAIL",
+          XAException.XAER_RMFAIL, xae.errorCode);
+    }
+  }
+
+  /**
+   * When trying to one-phase commit and connection issue happens then
+   * {@link XAException} error code {@link XAException#XAER_RMFAIL} is expected.
+   */
+  @Test
+  public void testNetworkIssueOnOnePhaseCommit() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+
+    xaconn.close();
+
+    try {
+      xaRes.commit(xid, true);
+      fail("One-phase commit is expected to fail as connection was closed");
+    } catch (XAException xae) {
+      assertEquals("One-phase commit call on closed connection expects XAER_RMFAIL",
+          XAException.XAER_RMFAIL, xae.errorCode);
+    }
+  }
+
+  /**
+   * When trying to rollback and connection issue happens then
+   * {@link XAException} error code {@link XAException#XAER_RMFAIL} is expected.
+   */
+  @Test
+  public void testNetworkIssueOnRollback() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    xaRes.end(xid, XAResource.TMSUCCESS);
+    xaRes.prepare(xid);
+
+    xaconn.close();
+
+    try {
+      xaRes.rollback(xid);
+      fail("Rollback is expected to fail as connection was closed");
+    } catch (XAException xae) {
+      assertEquals("Rollback call on closed connection expects XAER_RMFAIL",
+          XAException.XAER_RMFAIL, xae.errorCode);
+    }
+  }
+
+  /**
+   * When using deferred constraints a contraint violation can occur on prepare. This has to be
+   * mapped to the correct XA Error Code
+   */
+  @Test
+  public void testMappingOfConstraintViolations() throws Exception {
+    Xid xid = new CustomXid(1);
+    xaRes.start(xid, XAResource.TMNOFLAGS);
+    assertEquals(0, conn.createStatement().executeUpdate("SET CONSTRAINTS ALL DEFERRED"));
+    assertEquals(1, conn.createStatement().executeUpdate("INSERT INTO testxa3 VALUES (4)"));
+    xaRes.end(xid, XAResource.TMSUCCESS);
+
+    try {
+      xaRes.prepare(xid);
+
+      fail("Prepare is expected to fail as an integrity violation occurred");
+    } catch (XAException xae) {
+      assertEquals("Prepare call with deferred constraints violations expects XA_RBINTEGRITY",
+          XAException.XA_RBINTEGRITY, xae.errorCode);
     }
   }
 

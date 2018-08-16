@@ -22,10 +22,6 @@
 
   <property name="fileExtensions" value="java, properties, xml"/>
 
-  <module name="SuppressionCommentFilter">
-    <property name="offCommentFormat" value="CHECKSTYLE: OFF"/>
-    <property name="onCommentFormat"  value="CHECKSTYLE: ON"/>
-  </module>
 
   <!-- Checks for whitespace                               -->
   <!-- See http://checkstyle.sf.net/config_whitespace.html -->
@@ -37,8 +33,11 @@
   </module>
 
   <module name="TreeWalker">
-    <!-- For SuppressionCommentFilter -->
-    <module name="FileContentsHolder"/>
+
+    <module name="SuppressionCommentFilter">
+      <property name="offCommentFormat" value="CHECKSTYLE: OFF"/>
+      <property name="onCommentFormat"  value="CHECKSTYLE: ON"/>
+    </module>
 
     <module name="Regexp">
       <property name="format" value="[ \t]++$"/>
@@ -91,6 +90,7 @@
                value="WhitespaceAround: ''{0}'' is not preceded with whitespace."/>
     </module>
     <module name="OneStatementPerLine"/>
+    <module name="MissingDeprecated"/>
     <module name="MultipleVariableDeclarations"/>
     <module name="ArrayTypeStyle"/>
     <!--<module name="MissingSwitchDefault"/>-->
@@ -176,7 +176,7 @@
     </module>
     <module name="OverloadMethodsDeclarationOrder"/>
     <module name="VariableDeclarationUsageDistance"/>-->
-    <module name="com.puppycrawl.tools.checkstyle.checks.imports.CustomImportOrder">
+    <module name="CustomImportOrder">
       <property name="specialImportsRegExp" value="org.postgresql"/>
       <property name="sortImportsInGroupAlphabetically" value="true"/>
       <property name="customImportOrderRules"
@@ -204,12 +204,12 @@
       <property name="allowSamelineMultipleAnnotations" value="true"/>
     </module>
     <module name="NonEmptyAtclauseDescription"/>
-    <!--<module name="JavadocTagContinuationIndentation"/>-->
+    <module name="JavadocTagContinuationIndentation"/>
     <!--Causes lots of "first sentence of javadoc is not followed by a period"-->
     <!--<module name="SummaryJavadoc">-->
     <!--<property name="forbiddenSummaryFragments" value="^@return the *|^This method returns |^A [{]@code [a-zA-Z0-9]+[}]( is a )"/>-->
     <!--</module>-->
-    <!--<module name="JavadocParagraph"/>-->
+    <module name="JavadocParagraph"/>
     <!--<module name="AtclauseOrder">-->
     <!--<property name="tagOrder" value="@param, @return, @throws, @deprecated"/>-->
     <!--<property name="target" value="CLASS_DEF, INTERFACE_DEF, ENUM_DEF, METHOD_DEF, CTOR_DEF, VARIABLE_DEF"/>-->

@@ -6,13 +6,13 @@
 package org.postgresql.util;
 
 /**
- * This code is a stripped down version of Robert Harder's Public Domain Base64 implementation. GZIP
+ * <p>This code is a stripped down version of Robert Harder's Public Domain Base64 implementation. GZIP
  * support, InputStream and OutputStream stuff and some unneeded encode/decode methods have been
- * removed.
+ * removed.</p>
  *
- * -- Original comments follow --
+ * <p>-- Original comments follow --</p>
  *
- * Encodes and decodes to and from Base64 notation.
+ * <p>Encodes and decodes to and from Base64 notation.</p>
  *
  * <p>
  * Change Log:
@@ -77,7 +77,7 @@ public class Base64 {
 
 
   /**
-   * Don't break lines when encoding (violates strict Base64 specification)
+   * Don't break lines when encoding (violates strict Base64 specification).
    */
   public static final int DONT_BREAK_LINES = 8;
 
@@ -126,7 +126,7 @@ public class Base64 {
       (byte) '6', (byte) '7', (byte) '8', (byte) '9', (byte) '+', (byte) '/'
   };
 
-  /** Determine which ALPHABET to use. */
+  /* Determine which ALPHABET to use. */
   static {
     byte[] __bytes;
     try {
@@ -217,7 +217,7 @@ public class Base64 {
    * Encodes up to three bytes of the array <var>source</var> and writes the resulting four Base64
    * bytes to <var>destination</var>. The source and destination arrays can be manipulated anywhere
    * along their length by specifying <var>srcOffset</var> and <var>destOffset</var>. This method
-   * does not check to make sure your arrays are large enough to accomodate <var>srcOffset</var> + 3
+   * does not check to make sure your arrays are large enough to accommodate <var>srcOffset</var> + 3
    * for the <var>source</var> array or <var>destOffset</var> + 4 for the <var>destination</var>
    * array. The actual number of significant bytes in your array is given by <var>numSigBytes</var>.
    *
@@ -286,20 +286,20 @@ public class Base64 {
 
 
   /**
-   * Encodes a byte array into Base64 notation.
-   * <p>
-   * Valid options:
+   * <p>Encodes a byte array into Base64 notation.</p>
+   *
+   * <p>Valid options:</p>
    *
    * <pre>
    *   GZIP: gzip-compresses object before encoding it.
    *   DONT_BREAK_LINES: don't break lines at 76 characters
    *     <i>Note: Technically, this makes your encoding non-compliant.</i>
    * </pre>
-   * <p>
-   * Example: <code>encodeBytes( myData, Base64.GZIP )</code> or
-   * <p>
-   * Example: <code>encodeBytes(
-   * myData, Base64.GZIP | Base64.DONT_BREAK_LINES )</code>
+   *
+   * <p>Example: <code>encodeBytes( myData, Base64.GZIP )</code> or</p>
+   *
+   * <p>Example: <code>encodeBytes(
+   * myData, Base64.GZIP | Base64.DONT_BREAK_LINES )</code></p>
    *
    * @param source The data to convert
    * @param options Specified options
@@ -327,20 +327,20 @@ public class Base64 {
 
 
   /**
-   * Encodes a byte array into Base64 notation.
-   * <p>
-   * Valid options:
+   * <p>Encodes a byte array into Base64 notation.</p>
+   *
+   * <p>Valid options:</p>
    *
    * <pre>
    *   GZIP: gzip-compresses object before encoding it.
    *   DONT_BREAK_LINES: don't break lines at 76 characters
    *     <i>Note: Technically, this makes your encoding non-compliant.</i>
    * </pre>
-   * <p>
-   * Example: <code>encodeBytes( myData, Base64.GZIP )</code> or
-   * <p>
-   * Example: <code>encodeBytes(
-   * myData, Base64.GZIP | Base64.DONT_BREAK_LINES )</code>
+   *
+   * <p>Example: <code>encodeBytes( myData, Base64.GZIP )</code> or</p>
+   *
+   * <p>Example: <code>encodeBytes(
+   * myData, Base64.GZIP | Base64.DONT_BREAK_LINES )</code></p>
    *
    * @param source The data to convert
    * @param off Offset in array where conversion should begin
@@ -403,7 +403,7 @@ public class Base64 {
    * Decodes four bytes from array <var>source</var> and writes the resulting bytes (up to three of
    * them) to <var>destination</var>. The source and destination arrays can be manipulated anywhere
    * along their length by specifying <var>srcOffset</var> and <var>destOffset</var>. This method
-   * does not check to make sure your arrays are large enough to accomodate <var>srcOffset</var> + 4
+   * does not check to make sure your arrays are large enough to accommodate <var>srcOffset</var> + 4
    * for the <var>source</var> array or <var>destOffset</var> + 3 for the <var>destination</var>
    * array. This method returns the actual number of bytes that were converted from the Base64
    * encoding.

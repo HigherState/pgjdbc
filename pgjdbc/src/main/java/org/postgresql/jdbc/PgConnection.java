@@ -79,6 +79,7 @@ public class PgConnection implements BaseConnection {
   private static final Logger LOGGER = Logger.getLogger(PgConnection.class.getName());
 
   private static final SQLPermission SQL_PERMISSION_ABORT = new SQLPermission("callAbort");
+  private static final SQLPermission SQL_PERMISSION_NETWORK_TIMEOUT = new SQLPermission("setNetworkTimeout");
 
   //
   // Data initialized on construction:
@@ -106,7 +107,7 @@ public class PgConnection implements BaseConnection {
   protected int prepareThreshold;
 
   /**
-   * Default fetch size for statement
+   * Default fetch size for statement.
    *
    * @see PGProperty#DEFAULT_ROW_FETCH_SIZE
    */
@@ -203,43 +204,12 @@ public class PgConnection implements BaseConnection {
       setReadOnly(true);
     }
 
-    boolean binaryTransfer = PGProperty.BINARY_TRANSFER.getBoolean(info);
-    // Formats that currently have binary protocol support
-    Set<Integer> binaryOids = new HashSet<Integer>();
-    if (binaryTransfer && queryExecutor.getProtocolVersion() >= 3) {
-      binaryOids.add(Oid.BYTEA);
-      binaryOids.add(Oid.INT2);
-      binaryOids.add(Oid.INT4);
-      binaryOids.add(Oid.INT8);
-      binaryOids.add(Oid.FLOAT4);
-      binaryOids.add(Oid.FLOAT8);
-      binaryOids.add(Oid.TIME);
-      binaryOids.add(Oid.DATE);
-      binaryOids.add(Oid.TIMETZ);
-      binaryOids.add(Oid.TIMESTAMP);
-      binaryOids.add(Oid.TIMESTAMPTZ);
-      binaryOids.add(Oid.INT2_ARRAY);
-      binaryOids.add(Oid.INT4_ARRAY);
-      binaryOids.add(Oid.INT8_ARRAY);
-      binaryOids.add(Oid.FLOAT4_ARRAY);
-      binaryOids.add(Oid.FLOAT8_ARRAY);
-      binaryOids.add(Oid.FLOAT8_ARRAY);
-      binaryOids.add(Oid.VARCHAR_ARRAY);
-      binaryOids.add(Oid.TEXT_ARRAY);
-      binaryOids.add(Oid.POINT);
-      binaryOids.add(Oid.BOX);
-      binaryOids.add(Oid.UUID);
-    }
-
-    binaryOids.addAll(getOidSet(PGProperty.BINARY_TRANSFER_ENABLE.get(info)));
-    binaryOids.removeAll(getOidSet(PGProperty.BINARY_TRANSFER_DISABLE.get(info)));
+    Set<Integer> binaryOids = getBinaryOids(info);
 
     // split for receive and send for better control
-    Set<Integer> useBinarySendForOids = new HashSet<Integer>();
-    useBinarySendForOids.addAll(binaryOids);
+    Set<Integer> useBinarySendForOids = new HashSet<Integer>(binaryOids);
 
-    Set<Integer> useBinaryReceiveForOids = new HashSet<Integer>();
-    useBinaryReceiveForOids.addAll(binaryOids);
+    Set<Integer> useBinaryReceiveForOids = new HashSet<Integer>(binaryOids);
 
     /*
      * Does not pass unit tests because unit tests expect setDate to have millisecond accuracy
@@ -300,14 +270,9 @@ public class PgConnection implements BaseConnection {
     }
     this.disableColumnSanitiser = PGProperty.DISABLE_COLUMN_SANITISER.getBoolean(info);
 
-    TypeInfo types1 = getTypeInfo();
     if (haveMinimumServerVersion(ServerVersion.v8_3)) {
-      types1.addCoreType("uuid", Oid.UUID, Types.OTHER, "java.util.UUID", Oid.UUID_ARRAY);
-    }
-
-    TypeInfo types = getTypeInfo();
-    if (haveMinimumServerVersion(ServerVersion.v8_3)) {
-      types.addCoreType("xml", Oid.XML, Types.SQLXML, "java.sql.SQLXML", Oid.XML_ARRAY);
+      _typeCache.addCoreType("uuid", Oid.UUID, Types.OTHER, "java.util.UUID", Oid.UUID_ARRAY);
+      _typeCache.addCoreType("xml", Oid.XML, Types.SQLXML, "java.sql.SQLXML", Oid.XML_ARRAY);
     }
 
     this._clientInfo = new Properties();
@@ -327,7 +292,40 @@ public class PgConnection implements BaseConnection {
     replicationConnection = PGProperty.REPLICATION.get(info) != null;
   }
 
-  private Set<Integer> getOidSet(String oidList) throws PSQLException {
+  private static Set<Integer> getBinaryOids(Properties info) throws PSQLException {
+    boolean binaryTransfer = PGProperty.BINARY_TRANSFER.getBoolean(info);
+    // Formats that currently have binary protocol support
+    Set<Integer> binaryOids = new HashSet<Integer>(32);
+    if (binaryTransfer) {
+      binaryOids.add(Oid.BYTEA);
+      binaryOids.add(Oid.INT2);
+      binaryOids.add(Oid.INT4);
+      binaryOids.add(Oid.INT8);
+      binaryOids.add(Oid.FLOAT4);
+      binaryOids.add(Oid.FLOAT8);
+      binaryOids.add(Oid.TIME);
+      binaryOids.add(Oid.DATE);
+      binaryOids.add(Oid.TIMETZ);
+      binaryOids.add(Oid.TIMESTAMP);
+      binaryOids.add(Oid.TIMESTAMPTZ);
+      binaryOids.add(Oid.INT2_ARRAY);
+      binaryOids.add(Oid.INT4_ARRAY);
+      binaryOids.add(Oid.INT8_ARRAY);
+      binaryOids.add(Oid.FLOAT4_ARRAY);
+      binaryOids.add(Oid.FLOAT8_ARRAY);
+      binaryOids.add(Oid.VARCHAR_ARRAY);
+      binaryOids.add(Oid.TEXT_ARRAY);
+      binaryOids.add(Oid.POINT);
+      binaryOids.add(Oid.BOX);
+      binaryOids.add(Oid.UUID);
+    }
+
+    binaryOids.addAll(getOidSet(PGProperty.BINARY_TRANSFER_ENABLE.get(info)));
+    binaryOids.removeAll(getOidSet(PGProperty.BINARY_TRANSFER_DISABLE.get(info)));
+    return binaryOids;
+  }
+
+  private static Set<Integer> getOidSet(String oidList) throws PSQLException {
     Set<Integer> oids = new HashSet<Integer>();
     StringTokenizer tokenizer = new StringTokenizer(oidList, ",");
     while (tokenizer.hasMoreTokens()) {
@@ -358,26 +356,27 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * The current type mappings
+   * The current type mappings.
    */
   protected Map<String, Class<?>> typemap;
 
-  public java.sql.Statement createStatement() throws SQLException {
+  @Override
+  public Statement createStatement() throws SQLException {
     // We now follow the spec and default to TYPE_FORWARD_ONLY.
-    return createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,
-        java.sql.ResultSet.CONCUR_READ_ONLY);
+    return createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
   }
 
-  public java.sql.PreparedStatement prepareStatement(String sql) throws SQLException {
-    return prepareStatement(sql, java.sql.ResultSet.TYPE_FORWARD_ONLY,
-        java.sql.ResultSet.CONCUR_READ_ONLY);
+  @Override
+  public PreparedStatement prepareStatement(String sql) throws SQLException {
+    return prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
   }
 
-  public java.sql.CallableStatement prepareCall(String sql) throws SQLException {
-    return prepareCall(sql, java.sql.ResultSet.TYPE_FORWARD_ONLY,
-        java.sql.ResultSet.CONCUR_READ_ONLY);
+  @Override
+  public CallableStatement prepareCall(String sql) throws SQLException {
+    return prepareCall(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
   }
 
+  @Override
   public Map<String, Class<?>> getTypeMap() throws SQLException {
     checkClosed();
     return typemap;
@@ -406,10 +405,12 @@ public class PgConnection implements BaseConnection {
 
   }
 
+  @Override
   public ResultSet execSQLQuery(String s) throws SQLException {
     return execSQLQuery(s, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
   }
 
+  @Override
   public ResultSet execSQLQuery(String s, int resultSetType, int resultSetConcurrency)
       throws SQLException {
     BaseStatement stat = (BaseStatement) createStatement(resultSetType, resultSetConcurrency);
@@ -433,6 +434,7 @@ public class PgConnection implements BaseConnection {
     return stat.getResultSet();
   }
 
+  @Override
   public void execSQLUpdate(String s) throws SQLException {
     BaseStatement stmt = (BaseStatement) createStatement();
     if (stmt.executeWithFlags(s, QueryExecutor.QUERY_NO_METADATA | QueryExecutor.QUERY_NO_RESULTS
@@ -452,11 +454,11 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * In SQL, a result table can be retrieved through a cursor that is named. The current row of a
+   * <p>In SQL, a result table can be retrieved through a cursor that is named. The current row of a
    * result can be updated or deleted using a positioned update/delete statement that references the
-   * cursor name.
-   * <p>
-   * We do not support positioned update/delete, so this is a no-op.
+   * cursor name.</p>
+   *
+   * <p>We do not support positioned update/delete, so this is a no-op.</p>
    *
    * @param cursor the cursor name
    * @throws SQLException if a database access error occurs
@@ -478,10 +480,10 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * We are required to bring back certain information by the DatabaseMetaData class. These
-   * functions do that.
-   * <p>
-   * Method getURL() brings back the URL (good job we saved it)
+   * <p>We are required to bring back certain information by the DatabaseMetaData class. These
+   * functions do that.</p>
+   *
+   * <p>Method getURL() brings back the URL (good job we saved it)</p>
    *
    * @return the url
    * @throws SQLException just in case...
@@ -491,7 +493,7 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Method getUserName() brings back the User Name (again, we saved it)
+   * Method getUserName() brings back the User Name (again, we saved it).
    *
    * @return the user name
    * @throws SQLException just in case...
@@ -536,6 +538,7 @@ public class PgConnection implements BaseConnection {
    *
    * @exception SQLException if value is not correct for this type
    */
+  @Override
   public Object getObject(String type, String value, byte[] byteValue) throws SQLException {
     if (typemap != null) {
       Class<?> c = typemap.get(type);
@@ -653,12 +656,19 @@ public class PgConnection implements BaseConnection {
    *
    * {@inheritDoc}
    */
+  @Override
   public void close() throws SQLException {
+    if (queryExecutor == null) {
+      // This might happen in case constructor throws an exception (e.g. host being not available).
+      // When that happens the connection is still registered in the finalizer queue, so it gets finalized
+      return;
+    }
     releaseTimer();
     queryExecutor.close();
     openStackTrace = null;
   }
 
+  @Override
   public String nativeSQL(String sql) throws SQLException {
     checkClosed();
     CachedQuery cachedQuery = queryExecutor.createQuery(sql, false, true);
@@ -666,6 +676,7 @@ public class PgConnection implements BaseConnection {
     return cachedQuery.query.getNativeSql();
   }
 
+  @Override
   public synchronized SQLWarning getWarnings() throws SQLException {
     checkClosed();
     SQLWarning newWarnings = queryExecutor.getWarnings(); // NB: also clears them.
@@ -678,6 +689,7 @@ public class PgConnection implements BaseConnection {
     return firstWarning;
   }
 
+  @Override
   public synchronized void clearWarnings() throws SQLException {
     checkClosed();
     queryExecutor.getWarnings(); // Clear and discard.
@@ -685,6 +697,7 @@ public class PgConnection implements BaseConnection {
   }
 
 
+  @Override
   public void setReadOnly(boolean readOnly) throws SQLException {
     checkClosed();
     if (queryExecutor.getTransactionState() != TransactionState.IDLE) {
@@ -703,11 +716,13 @@ public class PgConnection implements BaseConnection {
     LOGGER.log(Level.FINE, "  setReadOnly = {0}", readOnly);
   }
 
+  @Override
   public boolean isReadOnly() throws SQLException {
     checkClosed();
     return readOnly;
   }
 
+  @Override
   public void setAutoCommit(boolean autoCommit) throws SQLException {
     checkClosed();
 
@@ -723,6 +738,7 @@ public class PgConnection implements BaseConnection {
     LOGGER.log(Level.FINE, "  setAutoCommit = {0}", autoCommit);
   }
 
+  @Override
   public boolean getAutoCommit() throws SQLException {
     checkClosed();
     return this.autoCommit;
@@ -748,6 +764,7 @@ public class PgConnection implements BaseConnection {
     }
   }
 
+  @Override
   public void commit() throws SQLException {
     checkClosed();
 
@@ -769,6 +786,7 @@ public class PgConnection implements BaseConnection {
   }
 
 
+  @Override
   public void rollback() throws SQLException {
     checkClosed();
 
@@ -865,11 +883,11 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Overrides finalize(). If called, it closes the connection.
-   * <p>
-   * This was done at the request of <a href="mailto:rachel@enlarion.demon.co.uk">Rachel
+   * <p>Overrides finalize(). If called, it closes the connection.</p>
+   *
+   * <p>This was done at the request of <a href="mailto:rachel@enlarion.demon.co.uk">Rachel
    * Greenham</a> who hit a problem where multiple clients didn't close the connection, and once a
-   * fortnight enough clients were open to kill the postgres server.
+   * fortnight enough clients were open to kill the postgres server.</p>
    */
   protected void finalize() throws Throwable {
     try {
@@ -884,7 +902,7 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Get server version number
+   * Get server version number.
    *
    * @return server version number
    */
@@ -893,7 +911,7 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Get server major version
+   * Get server major version.
    *
    * @return server major version
    */
@@ -907,7 +925,7 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Get server minor version
+   * Get server minor version.
    *
    * @return server minor version
    */
@@ -986,7 +1004,7 @@ public class PgConnection implements BaseConnection {
   }
 
   /**
-   * Handler for transaction queries
+   * Handler for transaction queries.
    */
   private class TransactionCommandHandler extends ResultHandlerBase {
     public void handleCompletion() throws SQLException {
@@ -1155,7 +1173,12 @@ public class PgConnection implements BaseConnection {
       if (o == null) {
         sb.append("NULL");
       } else if (o.getClass().isArray()) {
-        appendArray(sb, o, delim);
+        final PrimitiveArraySupport arraySupport = PrimitiveArraySupport.getArraySupport(o);
+        if (arraySupport != null) {
+          arraySupport.appendArray(sb, delim, o);
+        } else {
+          appendArray(sb, o, delim);
+        }
       } else {
         String s = o.toString();
         PgArray.escapeArrayElement(sb, s);
@@ -1271,6 +1294,49 @@ public class PgConnection implements BaseConnection {
   }
 
   @Override
+  public Array createArrayOf(String typeName, Object elements) throws SQLException {
+    checkClosed();
+
+    final TypeInfo typeInfo = getTypeInfo();
+
+    final int oid = typeInfo.getPGArrayType(typeName);
+    final char delim = typeInfo.getArrayDelimiter(oid);
+
+    if (oid == Oid.UNSPECIFIED) {
+      throw new PSQLException(GT.tr("Unable to find server array type for provided name {0}.", typeName),
+          PSQLState.INVALID_NAME);
+    }
+
+    if (elements == null) {
+      return makeArray(oid, null);
+    }
+
+    final String arrayString;
+
+    final PrimitiveArraySupport arraySupport = PrimitiveArraySupport.getArraySupport(elements);
+
+    if (arraySupport != null) {
+      // if the oid for the given type matches the default type, we might be
+      // able to go straight to binary representation
+      if (oid == arraySupport.getDefaultArrayTypeOid(typeInfo) && arraySupport.supportBinaryRepresentation()
+          && getPreferQueryMode() != PreferQueryMode.SIMPLE) {
+        return new PgArray(this, oid, arraySupport.toBinaryRepresentation(this, elements));
+      }
+      arrayString = arraySupport.toArrayString(delim, elements);
+    } else {
+      final Class<?> clazz = elements.getClass();
+      if (!clazz.isArray()) {
+        throw new PSQLException(GT.tr("Invalid elements {0}", elements), PSQLState.INVALID_PARAMETER_TYPE);
+      }
+      StringBuilder sb = new StringBuilder();
+      appendArray(sb, elements, delim);
+      arrayString = sb.toString();
+    }
+
+    return makeArray(oid, arrayString);
+  }
+
+  @Override
   public Array createArrayOf(String typeName, Object[] elements) throws SQLException {
     checkClosed();
 
@@ -1280,6 +1346,10 @@ public class PgConnection implements BaseConnection {
       throw new PSQLException(
           GT.tr("Unable to find server array type for provided name {0}.", typeName),
           PSQLState.INVALID_NAME);
+    }
+
+    if (elements == null) {
+      return makeArray(oid, null);
     }
 
     char delim = getTypeInfo().getArrayDelimiter(oid);
@@ -1316,7 +1386,7 @@ public class PgConnection implements BaseConnection {
         // "current transaction aborted", assume the connection is up and running
         return true;
       }
-      LOGGER.log(Level.WARNING, GT.tr("Validating connection."), e);
+      LOGGER.log(Level.FINE, GT.tr("Validating connection."), e);
     }
     return false;
   }
@@ -1385,7 +1455,7 @@ public class PgConnection implements BaseConnection {
     }
 
     if (!failures.isEmpty()) {
-      throw new SQLClientInfoException(GT.tr("One ore more ClientInfo failed."),
+      throw new SQLClientInfoException(GT.tr("One or more ClientInfo failed."),
           PSQLState.NOT_IMPLEMENTED.getState(), failures);
     }
   }
@@ -1409,11 +1479,13 @@ public class PgConnection implements BaseConnection {
     throw org.postgresql.Driver.notImplemented(this.getClass(), "createQueryObject(Class<T>)");
   }
 
+  @Override
   public boolean isWrapperFor(Class<?> iface) throws SQLException {
     checkClosed();
     return iface.isAssignableFrom(getClass());
   }
 
+  @Override
   public <T> T unwrap(Class<T> iface) throws SQLException {
     checkClosed();
     if (iface.isAssignableFrom(getClass())) {
@@ -1480,12 +1552,36 @@ public class PgConnection implements BaseConnection {
     }
   }
 
-  public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
-    throw org.postgresql.Driver.notImplemented(this.getClass(), "setNetworkTimeout(Executor, int)");
+  public void setNetworkTimeout(Executor executor /*not used*/, int milliseconds) throws SQLException {
+    checkClosed();
+
+    if (milliseconds < 0) {
+      throw new PSQLException(GT.tr("Network timeout must be a value greater than or equal to 0."),
+              PSQLState.INVALID_PARAMETER_VALUE);
+    }
+
+    SecurityManager securityManager = System.getSecurityManager();
+    if (securityManager != null) {
+      securityManager.checkPermission(SQL_PERMISSION_NETWORK_TIMEOUT);
+    }
+
+    try {
+      queryExecutor.setNetworkTimeout(milliseconds);
+    } catch (IOException ioe) {
+      throw new PSQLException(GT.tr("Unable to set network timeout."),
+              PSQLState.COMMUNICATION_ERROR, ioe);
+    }
   }
 
   public int getNetworkTimeout() throws SQLException {
-    throw org.postgresql.Driver.notImplemented(this.getClass(), "getNetworkTimeout()");
+    checkClosed();
+
+    try {
+      return queryExecutor.getNetworkTimeout();
+    } catch (IOException ioe) {
+      throw new PSQLException(GT.tr("Unable to get network timeout."),
+              PSQLState.COMMUNICATION_ERROR, ioe);
+    }
   }
 
   @Override
@@ -1571,18 +1667,21 @@ public class PgConnection implements BaseConnection {
     pgSavepoint.invalidate();
   }
 
+  @Override
   public Statement createStatement(int resultSetType, int resultSetConcurrency)
       throws SQLException {
     checkClosed();
     return createStatement(resultSetType, resultSetConcurrency, getHoldability());
   }
 
+  @Override
   public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency)
       throws SQLException {
     checkClosed();
     return prepareStatement(sql, resultSetType, resultSetConcurrency, getHoldability());
   }
 
+  @Override
   public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency)
       throws SQLException {
     checkClosed();
@@ -1609,6 +1708,7 @@ public class PgConnection implements BaseConnection {
         PSQLState.NOT_IMPLEMENTED);
   }
 
+  @Override
   public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException {
     if (columnNames != null && columnNames.length == 0) {
       return prepareStatement(sql);

@@ -12,6 +12,7 @@ import org.postgresql.util.ExpressionProperties;
 import org.postgresql.util.GT;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
+import org.postgresql.util.URLCoder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -25,7 +26,6 @@ import java.sql.SQLException;
 import java.util.Properties;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
 import javax.naming.NamingException;
 import javax.naming.RefAddr;
 import javax.naming.Reference;
@@ -97,7 +97,7 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
       }
       return con;
     } catch (SQLException e) {
-      LOGGER.log(Level.SEVERE, "Failed to create a {0} for {1} at {2}: {3}",
+      LOGGER.log(Level.FINE, "Failed to create a {0} for {1} at {2}: {3}",
           new Object[]{getDescription(), user, getUrl(), e});
       throw e;
     }
@@ -881,6 +881,22 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
   }
 
   /**
+   * @return true if perform JAAS login before GSS authentication
+   * @see PGProperty#JAAS_LOGIN
+   */
+  public boolean getJaasLogin() {
+    return PGProperty.JAAS_LOGIN.getBoolean(properties);
+  }
+
+  /**
+   * @param doLogin true if perform JAAS login before GSS authentication
+   * @see PGProperty#JAAS_LOGIN
+   */
+  public void setJaasLogin(boolean doLogin) {
+    PGProperty.JAAS_LOGIN.set(properties, doLogin);
+  }
+
+  /**
    * @return Kerberos server name
    * @see PGProperty#KERBEROS_SERVER_NAME
    */
@@ -1053,17 +1069,17 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
     if (portNumber != 0) {
       url.append(":").append(portNumber);
     }
-    url.append("/").append(databaseName);
+    url.append("/").append(URLCoder.encode(databaseName));
 
     StringBuilder query = new StringBuilder(100);
-    for (PGProperty property : PGProperty.values()) {
+    for (PGProperty property: PGProperty.values()) {
       if (property.isPresent(properties)) {
         if (query.length() != 0) {
           query.append("&");
         }
         query.append(property.getName());
         query.append("=");
-        query.append(property.get(properties));
+        query.append(URLCoder.encode(property.get(properties)));
       }
     }
 
@@ -1073,6 +1089,15 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
     }
 
     return url.toString();
+  }
+
+  /**
+   * Generates a {@link DriverManager} URL from the other properties supplied.
+   *
+   * @return {@link DriverManager} URL from the other properties supplied
+   */
+  public String getURL() {
+    return getUrl();
   }
 
   /**
@@ -1087,6 +1112,16 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
     for (PGProperty property : PGProperty.values()) {
       setProperty(property, property.get(p));
     }
+  }
+
+  /**
+   * Sets properties from a {@link DriverManager} URL.
+   * Added to follow convention used in other DBMS.
+   *
+   * @param url properties to set
+   */
+  public void setURL(String url) {
+    setUrl(url);
   }
 
   public String getProperty(String name) throws SQLException {
@@ -1181,11 +1216,9 @@ public abstract class BaseDataSource implements CommonDataSource, Referenceable 
       portNumber = Integer.parseInt(port);
     }
     serverName = getReferenceProperty(ref, "serverName");
-    user = getReferenceProperty(ref, "user");
-    password = getReferenceProperty(ref, "password");
 
     for (PGProperty property : PGProperty.values()) {
-      property.set(properties, getReferenceProperty(ref, property.getName()));
+      setProperty(property, getReferenceProperty(ref, property.getName()));
     }
   }
 

@@ -22,12 +22,14 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Utility class for JDBC tests
+ * Utility class for JDBC tests.
  */
 public class TestUtil {
   /*
@@ -253,10 +255,10 @@ public class TestUtil {
   }
 
   /**
-   * Get a connection using a priviliged user mostly for tests that the ability to load C functions
-   * now as of 4/14
+   * Get a connection using a privileged user mostly for tests that the ability to load C functions
+   * now as of 4/14.
    *
-   * @return connection using a priviliged user mostly for tests that the ability to load C
+   * @return connection using a privileged user mostly for tests that the ability to load C
    *         functions now as of 4/14
    */
   public static Connection openPrivilegedDB() throws Exception {
@@ -391,7 +393,7 @@ public class TestUtil {
   }
 
   /**
-   * Helper creates a temporary table
+   * Helper creates a temporary table.
    *
    * @param con Connection
    * @param table String
@@ -413,7 +415,7 @@ public class TestUtil {
   }
 
   /**
-   * Helper creates an enum type
+   * Helper creates an enum type.
    *
    * @param con Connection
    * @param name String
@@ -435,7 +437,7 @@ public class TestUtil {
   }
 
   /**
-   * Helper creates an composite type
+   * Helper creates an composite type.
    *
    * @param con Connection
    * @param name String
@@ -457,7 +459,7 @@ public class TestUtil {
   }
 
   /**
-   * Drops a domain
+   * Drops a domain.
    *
    * @param con Connection
    * @param name String
@@ -477,7 +479,7 @@ public class TestUtil {
   }
 
   /**
-   * Helper creates a domain
+   * Helper creates a domain.
    *
    * @param con Connection
    * @param name String
@@ -696,6 +698,34 @@ public class TestUtil {
     }
   }
 
+  public static List<String> resultSetToLines(ResultSet rs) throws SQLException {
+    List<String> res = new ArrayList<String>();
+    ResultSetMetaData rsmd = rs.getMetaData();
+    StringBuilder sb = new StringBuilder();
+    while (rs.next()) {
+      sb.setLength(0);
+      for (int i = 1; i <= rsmd.getColumnCount(); i++) {
+        if (i != 1) {
+          sb.append(',');
+        }
+        sb.append(rs.getString(i));
+      }
+      res.add(sb.toString());
+    }
+    return res;
+  }
+
+  public static String join(List<String> list) {
+    StringBuilder sb = new StringBuilder();
+    for (String s : list) {
+      if (sb.length() > 0) {
+        sb.append('\n');
+      }
+      sb.append(s);
+    }
+    return sb.toString();
+  }
+
   /*
    * Find the column for the given label. Only SQLExceptions for system or set-up problems are
    * thrown. The PSQLState.UNDEFINED_COLUMN type exception is consumed to allow cleanup. Relying on
@@ -752,7 +782,7 @@ public class TestUtil {
 
   public static void recreateLogicalReplicationSlot(Connection connection, String slotName, String outputPlugin)
       throws SQLException, InterruptedException, TimeoutException {
-    //drop previos slot
+    //drop previous slot
     dropReplicationSlot(connection, slotName);
 
     PreparedStatement stm = null;
@@ -768,7 +798,7 @@ public class TestUtil {
 
   public static void recreatePhysicalReplicationSlot(Connection connection, String slotName)
       throws SQLException, InterruptedException, TimeoutException {
-    //drop previos slot
+    //drop previous slot
     dropReplicationSlot(connection, slotName);
 
     PreparedStatement stm = null;

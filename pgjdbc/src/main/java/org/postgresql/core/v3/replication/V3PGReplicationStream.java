@@ -33,7 +33,7 @@ public class V3PGReplicationStream implements PGReplicationStream {
 
   private LogSequenceNumber lastServerLSN = LogSequenceNumber.INVALID_LSN;
   /**
-   * Last receive LSN + payload size
+   * Last receive LSN + payload size.
    */
   private LogSequenceNumber lastReceiveLSN = LogSequenceNumber.INVALID_LSN;
   private LogSequenceNumber lastAppliedLSN = LogSequenceNumber.INVALID_LSN;
@@ -222,6 +222,9 @@ public class V3PGReplicationStream implements PGReplicationStream {
 
   private boolean processKeepAliveMessage(ByteBuffer buffer) {
     lastServerLSN = LogSequenceNumber.valueOf(buffer.getLong());
+    if (lastServerLSN.asLong() > lastReceiveLSN.asLong()) {
+      lastReceiveLSN = lastServerLSN;
+    }
 
     long lastServerClock = buffer.getLong();
 

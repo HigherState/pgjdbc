@@ -13,6 +13,7 @@ import org.postgresql.core.ParameterList;
 import org.postgresql.core.Query;
 import org.postgresql.core.QueryExecutor;
 import org.postgresql.core.ServerVersion;
+import org.postgresql.core.TypeInfo;
 import org.postgresql.core.v3.BatchedQuery;
 import org.postgresql.largeobject.LargeObject;
 import org.postgresql.largeobject.LargeObjectManager;
@@ -70,18 +71,6 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
   protected final CachedQuery preparedQuery; // Query fragments for prepared statement.
   protected final ParameterList preparedParameters; // Parameter values for prepared statement.
 
-  /**
-   * used to differentiate between new function call logic and old function call logic will be set
-   * to true if the server is &lt; 8.1 or if we are using v2 protocol There is an exception to this
-   * where we are using v3, and the call does not have an out parameter before the call
-   */
-  protected boolean adjustIndex = false;
-
-  /*
-   * Used to set adjustIndex above
-   */
-  protected boolean outParmBeforeFunc = false;
-
   private TimeZone defaultTimeZone;
 
   PgPreparedStatement(PgConnection connection, String sql, int rsType, int rsConcurrency,
@@ -118,12 +107,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
       throw new PSQLException(GT.tr("No results were returned by the query."), PSQLState.NO_DATA);
     }
 
-    if (result.getNext() != null) {
-      throw new PSQLException(GT.tr("Multiple ResultSets were returned by the query."),
-          PSQLState.TOO_MANY_RESULTS);
-    }
-
-    return result.getResultSet();
+    return getSingleResultSet();
   }
 
   public int executeUpdate(String p_sql) throws SQLException {
@@ -135,17 +119,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
   public int executeUpdate() throws SQLException {
     executeWithFlags(QueryExecutor.QUERY_NO_RESULTS);
 
-    ResultWrapper iter = result;
-    while (iter != null) {
-      if (iter.getResultSet() != null) {
-        throw new PSQLException(GT.tr("A result was returned when none was expected."),
-            PSQLState.TOO_MANY_RESULTS);
-
-      }
-      iter = iter.getNext();
-    }
-
-    return getUpdateCount();
+    return getNoResultUpdateCount();
   }
 
   public boolean execute(String p_sql) throws SQLException {
@@ -168,7 +142,10 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
       execute(preparedQuery, preparedParameters, flags);
 
-      return (result != null && result.getResultSet() != null);
+      synchronized (this) {
+        checkClosed();
+        return (result != null && result.getResultSet() != null);
+      }
     } finally {
       defaultTimeZone = null;
     }
@@ -182,24 +159,10 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
   }
 
   @Override
-  public void close() throws SQLException {
-    if (isClosed) {
-      return;
-    }
-
+  public void closeImpl() throws SQLException {
     if (preparedQuery != null) {
-      // See #368. We need to prevent closing the same statement twice
-      // Otherwise we might "release" a query that someone else is already using
-      // In other words, client does .close() as usual, however cleanup thread might fail to observe
-      // isClosed=true
-      synchronized (preparedQuery) {
-        if (!isClosed) {
-          ((PgConnection) connection).releaseQuery(preparedQuery);
-        }
-      }
+      ((PgConnection) connection).releaseQuery(preparedQuery);
     }
-
-    super.close();
   }
 
   public void setNull(int parameterIndex, int sqlType) throws SQLException {
@@ -272,9 +235,6 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
       default:
         // Bad Types value.
         throw new PSQLException(GT.tr("Unknown Types value."), PSQLState.INVALID_PARAMETER_TYPE);
-    }
-    if (adjustIndex) {
-      parameterIndex--;
     }
     preparedParameters.setNull(parameterIndex, oid);
   }
@@ -361,9 +321,6 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     // if the passed string is null, then set this column to null
     checkClosed();
     if (x == null) {
-      if (adjustIndex) {
-        parameterIndex--;
-      }
       preparedParameters.setNull(parameterIndex, oid);
     } else {
       bindString(parameterIndex, x, oid);
@@ -682,6 +639,8 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
       case Types.ARRAY:
         if (in instanceof Array) {
           setArray(parameterIndex, (Array) in);
+        } else if (PrimitiveArraySupport.isSupportedPrimitiveArray(in)) {
+          setPrimitiveArray(parameterIndex, in);
         } else {
           throw new PSQLException(
               GT.tr("Cannot cast an instance of {0} to type {1}",
@@ -704,6 +663,21 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
       default:
         throw new PSQLException(GT.tr("Unsupported Types value: {0}", targetSqlType),
             PSQLState.INVALID_PARAMETER_TYPE);
+    }
+  }
+
+  private <A> void setPrimitiveArray(int parameterIndex, A in) throws SQLException {
+    final PrimitiveArraySupport<A> arrayToString = PrimitiveArraySupport.getArraySupport(in);
+
+    final TypeInfo typeInfo = connection.getTypeInfo();
+
+    final int oid = arrayToString.getDefaultArrayTypeOid(typeInfo);
+
+    if (arrayToString.supportBinaryRepresentation() && connection.getPreferQueryMode() != PreferQueryMode.SIMPLE) {
+      bindBytes(parameterIndex, arrayToString.toBinaryRepresentation(connection, in), oid);
+    } else {
+      final char delim = typeInfo.getArrayDelimiter(oid);
+      setString(parameterIndex, arrayToString.toArrayString(delim, in), oid);
     }
   }
 
@@ -968,6 +942,8 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
       setMap(parameterIndex, (Map<?, ?>) x);
     } else if (x instanceof Number) {
       setNumber(parameterIndex, (Number) x);
+    } else if (PrimitiveArraySupport.isSupportedPrimitiveArray(x)) {
+      setPrimitiveArray(parameterIndex, x);
     } else {
       // Can't infer a type.
       throw new PSQLException(GT.tr(
@@ -1000,16 +976,10 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
    * @throws SQLException if something goes wrong
    */
   protected void bindLiteral(int paramIndex, String s, int oid) throws SQLException {
-    if (adjustIndex) {
-      paramIndex--;
-    }
     preparedParameters.setLiteralParameter(paramIndex, s, oid);
   }
 
   protected void bindBytes(int paramIndex, byte[] b, int oid) throws SQLException {
-    if (adjustIndex) {
-      paramIndex--;
-    }
     preparedParameters.setBinaryParameter(paramIndex, b, oid);
   }
 
@@ -1023,9 +993,6 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
    * @throws SQLException if something goes wrong
    */
   private void bindString(int paramIndex, String s, int oid) throws SQLException {
-    if (adjustIndex) {
-      paramIndex--;
-    }
     preparedParameters.setStringParameter(paramIndex, s, oid);
   }
 
@@ -1096,10 +1063,8 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     // literal from Array.toString(), such as the implementation we return
     // from ResultSet.getArray(). Eventually we need a proper implementation
     // here that works for any Array implementation.
-
-    // Add special suffix for array identification
-    String typename = x.getBaseTypeName() + "[]";
-    int oid = connection.getTypeInfo().getPGType(typename);
+    String typename = x.getBaseTypeName();
+    int oid = connection.getTypeInfo().getPGArrayType(typename);
     if (oid == Oid.UNSPECIFIED) {
       throw new PSQLException(GT.tr("Unknown type {0}.", typename),
           PSQLState.INVALID_PARAMETER_TYPE);
@@ -1245,9 +1210,18 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     setLong(i, oid);
   }
 
-  public void setNull(int i, int t, String s) throws SQLException {
+  public void setNull(int parameterIndex, int t, String typeName) throws SQLException {
+    if (typeName == null) {
+      setNull(parameterIndex, t);
+      return;
+    }
+
     checkClosed();
-    setNull(i, t);
+
+    TypeInfo typeInfo = connection.getTypeInfo();
+    int oid = typeInfo.getPGType(typeName);
+
+    preparedParameters.setNull(parameterIndex, oid);
   }
 
   public void setRef(int i, Ref x) throws SQLException {
@@ -1525,10 +1499,11 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
   public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {
     checkClosed();
-    if (xmlObject == null || xmlObject.getString() == null) {
+    String stringValue = xmlObject == null ? null : xmlObject.getString();
+    if (stringValue == null) {
       setNull(parameterIndex, Types.SQLXML);
     } else {
-      setString(parameterIndex, xmlObject.getString(), Oid.XML);
+      setString(parameterIndex, stringValue, Oid.XML);
     }
   }
 

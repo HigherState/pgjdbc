@@ -5,10 +5,16 @@
 
 package org.postgresql.test.jdbc2;
 
+import org.postgresql.core.CommandCompleteParserNegativeTest;
+import org.postgresql.core.CommandCompleteParserTest;
+import org.postgresql.core.OidToStringTest;
+import org.postgresql.core.OidValueOfTest;
 import org.postgresql.core.ParserTest;
 import org.postgresql.core.ReturningParserTest;
 import org.postgresql.core.v3.V3ParameterListTests;
 import org.postgresql.jdbc.DeepBatchedInsertStatementTest;
+import org.postgresql.jdbc.PrimitiveArraySupportTest;
+import org.postgresql.test.core.JavaVersionTest;
 import org.postgresql.test.core.NativeQueryBindLengthTest;
 import org.postgresql.test.util.ExpressionPropertiesTest;
 import org.postgresql.test.util.LruCacheTest;
@@ -25,9 +31,11 @@ import org.junit.runners.Suite;
 @RunWith(Suite.class)
 @Suite.SuiteClasses({
         ANTTest.class,
+        JavaVersionTest.class,
 
         DriverTest.class,
         ConnectionTest.class,
+        DateStyleTest.class,
         DatabaseMetaDataTest.class,
         DatabaseMetaDataPropertiesTest.class,
         SearchPathLookupTest.class,
@@ -58,7 +66,9 @@ import org.junit.runners.Suite;
 
         ResultSetTest.class,
         ResultSetMetaDataTest.class,
+        StringTypeUnspecifiedArrayTest.class,
         ArrayTest.class,
+        PrimitiveArraySupportTest.class,
         RefCursorTest.class,
 
         DateTest.class,
@@ -70,6 +80,12 @@ import org.junit.runners.Suite;
         TimezoneCachingTest.class,
         ParserTest.class,
         ReturningParserTest.class,
+        CommandCompleteParserTest.class,
+        CommandCompleteParserNegativeTest.class,
+        ReplaceProcessingTest.class,
+
+        OidToStringTest.class,
+        OidValueOfTest.class,
 
         PreparedStatementTest.class,
         StatementTest.class,
@@ -87,6 +103,7 @@ import org.junit.runners.Suite;
         MiscTest.class,
         NotifyTest.class,
         DatabaseEncodingTest.class,
+        ClientEncodingTest.class,
 
         BlobTest.class,
         BlobTransactionTest.class,
@@ -113,7 +130,8 @@ import org.junit.runners.Suite;
         CopyTest.class,
         CopyLargeFileTest.class,
         ServerErrorTest.class,
-        UpsertTest.class
+        UpsertTest.class,
+        OuterJoinSyntaxTest.class
 })
 public class Jdbc2TestSuite {
 }
